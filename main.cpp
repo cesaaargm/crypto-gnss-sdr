@@ -3,6 +3,7 @@
 #include <openssl/ecdsa.h> // ECDSA
 #include <openssl/ec.h>
 #include <openssl/evp.h> // ECDSA signing and verifying
+//#include "openssl/crypto.h" //OPENSSL_malloc
 #include <iomanip>
 #include <cstring>
 #include <cryptopp/sha.h>
@@ -30,7 +31,11 @@ ByteArray sha256(const ByteArray message,
                  ByteArray digest);
 
 // Forward declarations -- Key root verification
-bool calculate_ECDSA_openSSL(const char* message);
+void KrootVerification();
+bool calculate_ECDSA_openSSL(const char* message,
+                             evp_pkey_st *PublicKey,
+                             const unsigned char* DigitalSignature, size_t sizeDS);
+void ECDSA_sign(const char* message, EVP_PKEY* PublicKey, void* Signature);
 
 
 int main() {
@@ -47,6 +52,9 @@ int main() {
 
     // Public Key Verification
     publicKeyVerification();
+
+    // TESLA Kroot Verification
+    KrootVerification();
 
     return 0;
 }
@@ -179,24 +187,58 @@ ByteArray concatenate(ByteArray input1,size_t size1, ByteArray input2,size_t siz
     return result;
 }
 
-// Functions -- Key root verification
-bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const unsigned char* DigitalSignature){
-    // TODO: debug PK and DS, strlen of unsigned?
+/*!
+     * \brief
+     * Method for testing the ECDSA capabilities of openSSL::libcrypto
+     */
+void KrootVerification(){
+    // TODO define the TESLA Key Root (message)
+    // TODO create an ECDSA-P-256 private and public keys
+    // TODO  create a signature (DS) with the private key and message
+    // TODO encrypt signature and message with recipient's public key -- this step is omitted
+    // TODO define size of digital signature OR change type and apply respective function to comput size.
 
-    EVP_MD_CTX *mdctx = NULL;
+    // Parameters
+    const char* Kroot;
+    evp_pkey_st* Pk;
+    const unsigned char* DS;
+    void* Signature = NULL;
+    ECDSA_sign(Kroot,Pk,Signature);
+    bool resultVerificationKroot = calculate_ECDSA_openSSL(Kroot,
+                                                           Pk,
+                                                           DS,
+                                                           -1);
+
+    std::cout << "The Kroot and the digital signature provided are: " << resultVerificationKroot << std::endl;
+}
+    /*!
+     * \brief Uses the Elliptic Curve Digital Signature Algorithm to verify that the signature (and key root, part of
+     * the signature) belong to the private key associated with the public key given.
+     * \returns bool with the verification result
+     */
+bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const unsigned char* DigitalSignature, size_t sizeDS){
+    /* Questions to answer:
+     * pctx is null?
+     * engine?
+     * convert from bytes to evp_pkey_st
+     */
+
+    // Verify the signature with the public key.
+
+    EVP_MD_CTX *mdctx = NULL; // verification context; a struct that wraps the message to be verified.
     int ret = 0;
 
     /* Create the Message Digest Context */
-    if(!(mdctx = EVP_MD_CTX_create())) goto err;
+    if(!(mdctx = EVP_MD_CTX_new())) goto err; // Allocates and returns a digest context.
 
     /* Initialize `key` with a public key */
     // hashes cnt bytes of data at d into the verification context ctx
-    if(1 != EVP_DigestVerifyInit(mdctx, NULL, EVP_sha256(), NULL, PublicKey)) goto err;
+    if(1 != EVP_DigestVerifyInit(mdctx, NULL /*TODO null?*/, EVP_sha256(), NULL, PublicKey)) goto err;
 
     /* Initialize `key` with a public key */
     if(1 != EVP_DigestVerifyUpdate(mdctx, message, strlen(message))) goto err;
 
-    if(1 == EVP_DigestVerifyFinal(mdctx, DigitalSignature, -1))
+    if(1 == EVP_DigestVerifyFinal(mdctx, DigitalSignature, sizeDS))
     {
         return true;
     }
@@ -204,6 +246,54 @@ bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const 
     if(ret != 1)
     {
         /* Do some error handling */
+        // notify other blocks
+        std::cout << "calculate_ECDSA_openSSL()::error " << ret  << std::endl;
+
     }
     return false;
+}
+
+    /*! \brief
+     * Uses the Elliptic Curve Digital Signature Algorithm to sign a message with a private key
+     * \returns bool with the process result
+     */
+void ECDSA_sign(const char* message, EVP_PKEY* PublicKey, void* Signature){
+    EVP_MD_CTX *mdctx = NULL;
+    int ret = 0;
+    size_t* SignatureLength {nullptr};
+/* Create the Message Digest Context */
+    if(!(mdctx = EVP_MD_CTX_new())) goto err;
+
+/* Initialise the DigestSign operation - SHA-256 has been selected as the message digest function in this example */
+    if(1 != EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, PublicKey)) goto err;
+
+    /* Call update with the message */
+    if(1 != EVP_DigestSignUpdate(mdctx, message, strlen(message))) goto err;
+
+    /* Finalise the DigestSign operation */
+    /* First call EVP_DigestSignFinal with a NULL sig parameter to obtain the length of the
+     * signature. Length is returned in slen */
+
+    if(1 != EVP_DigestSignFinal(mdctx, NULL,SignatureLength )) goto err;
+    /* Allocate memory for the signature based on size in slen */
+    if(!(Signature = CRYPTO_malloc(sizeof(unsigned char) * (*SignatureLength),
+                                   "",
+                                   -1))) goto err; // TODO define
+    /* Obtain the signature */
+    if(1 != EVP_DigestSignFinal(mdctx,
+                                reinterpret_cast<unsigned char*>(Signature)/*totally unsure*/,
+                                SignatureLength)) goto err;
+
+    /* Success */
+    ret = 1;
+        std::cout << "The signature of" << message << "is: " << Signature << std::endl;
+    err:
+    if(ret != 1)
+    {
+        /* Do some error handling */
+    }
+
+    /* Clean up */
+    if(Signature && !ret) CRYPTO_free(Signature,"",-1); // TODO Define
+    if(mdctx) EVP_MD_CTX_free(mdctx);
 }
