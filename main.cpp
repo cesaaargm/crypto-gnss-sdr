@@ -4,6 +4,7 @@
 #include <openssl/ec.h>
 #include <openssl/evp.h> // ECDSA signing and verifying
 //#include "openssl/crypto.h" //OPENSSL_malloc
+#include <openssl/decoder.h> // reading the key pair from file
 #include <iomanip>
 #include <cstring>
 #include <cryptopp/sha.h>
@@ -32,10 +33,11 @@ ByteArray sha256(const ByteArray message,
 
 // Forward declarations -- Key root verification
 void KrootVerification();
-bool calculate_ECDSA_openSSL(const char* message,
-                             evp_pkey_st *PublicKey,
-                             const unsigned char* DigitalSignature, size_t sizeDS);
-void ECDSA_sign(const char* message, EVP_PKEY* PublicKey, void* Signature);
+void ECDSA_LoadKeys();
+bool ECDSA_Verify_OSSL(const char* message,
+                       evp_pkey_st *PublicKey,
+                       const unsigned char* DigitalSignature, size_t sizeDS);
+void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature);
 
 
 int main() {
@@ -196,18 +198,21 @@ void KrootVerification(){
     // TODO create an ECDSA-P-256 private and public keys
     // TODO  create a signature (DS) with the private key and message
     // TODO encrypt signature and message with recipient's public key -- this step is omitted
+    // TODO debug the
     // TODO define size of digital signature OR change type and apply respective function to comput size.
 
     // Parameters
     const char* Kroot;
-    evp_pkey_st* Pk;
+    evp_pkey_st* PublicKey;
+    evp_pkey_st* PrivateKey; // structure? create private key with ECC?
     const unsigned char* DS;
     void* Signature = NULL;
-    ECDSA_sign(Kroot,Pk,Signature);
-    bool resultVerificationKroot = calculate_ECDSA_openSSL(Kroot,
-                                                           Pk,
-                                                           DS,
-                                                           -1);
+    ECDSA_LoadKeys();
+    ECDSA_Sign_OSSL(Kroot, PublicKey, Signature);
+    bool resultVerificationKroot = ECDSA_Verify_OSSL(Kroot,
+                                                     PublicKey,
+                                                     DS,
+                                                     -1);
 
     std::cout << "The Kroot and the digital signature provided are: " << resultVerificationKroot << std::endl;
 }
@@ -216,7 +221,7 @@ void KrootVerification(){
      * the signature) belong to the private key associated with the public key given.
      * \returns bool with the verification result
      */
-bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const unsigned char* DigitalSignature, size_t sizeDS){
+bool ECDSA_Verify_OSSL(const char* message, evp_pkey_st *PublicKey, const unsigned char* DigitalSignature, size_t sizeDS){
     /* Questions to answer:
      * pctx is null?
      * engine?
@@ -247,7 +252,7 @@ bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const 
     {
         /* Do some error handling */
         // notify other blocks
-        std::cout << "calculate_ECDSA_openSSL()::error " << ret  << std::endl;
+        std::cout << "ECDSA_Verify_OSSL()::error " << ret  << std::endl;
 
     }
     return false;
@@ -257,7 +262,7 @@ bool calculate_ECDSA_openSSL(const char* message, evp_pkey_st *PublicKey, const 
      * Uses the Elliptic Curve Digital Signature Algorithm to sign a message with a private key
      * \returns bool with the process result
      */
-void ECDSA_sign(const char* message, EVP_PKEY* PublicKey, void* Signature){
+void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature){
     EVP_MD_CTX *mdctx = NULL;
     int ret = 0;
     size_t* SignatureLength {nullptr};
@@ -296,4 +301,33 @@ void ECDSA_sign(const char* message, EVP_PKEY* PublicKey, void* Signature){
     /* Clean up */
     if(Signature && !ret) CRYPTO_free(Signature,"",-1); // TODO Define
     if(mdctx) EVP_MD_CTX_free(mdctx);
+}
+
+void ECDSA_LoadKeys() {
+    // TODO retrieve PrivateKeyBytes from .pem
+
+    OSSL_DECODER_CTX *dctx;
+    EVP_PKEY *pkey = NULL;
+    const char *format = "PEM";   /* NULL for any format */
+    const char *structure = NULL; /* any structure */
+    const char *keytype = "RSA";  /* NULL for any key */
+    const unsigned char *pass = NULL;
+    const unsigned char** PrivateKeyBytes;
+    size_t* SizePrivateKey;
+    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, format, structure,
+                                         keytype,
+                                         OSSL_KEYMGMT_SELECT_KEYPAIR
+                                         | OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+                                         NULL, NULL);
+    if (dctx == NULL) {
+        /* error: no suitable potential decoders found */
+    }
+    if (pass != NULL)
+        OSSL_DECODER_CTX_set_passphrase(dctx, pass, -1/*strlen(pass)*/);
+    if (OSSL_DECODER_from_data(dctx,PrivateKeyBytes,SizePrivateKey)) {
+        /* pkey is created with the decoded data from the buffer */
+    } else {
+        /* decoding failure */
+    }
+    OSSL_DECODER_CTX_free(dctx);
 }
