@@ -5,6 +5,7 @@
 #include <openssl/evp.h> // ECDSA signing and verifying
 //#include "openssl/crypto.h" //OPENSSL_malloc
 #include <openssl/decoder.h> // reading the key pair from file
+#include <openssl/pem.h>
 #include <iomanip>
 #include <cstring>
 #include <cryptopp/sha.h>
@@ -33,7 +34,7 @@ ByteArray sha256(const ByteArray message,
 
 // Forward declarations -- Key root verification
 void KrootVerification();
-void ECDSA_LoadKeys();
+void ECDSA_LoadKeys(std::string path);
 bool ECDSA_Verify_OSSL(const char* message,
                        evp_pkey_st *PublicKey,
                        const unsigned char* DigitalSignature, size_t sizeDS);
@@ -53,7 +54,7 @@ int main() {
     std::string Sha256_cryptopp = calculateSHA256_cryptopp(input);
 
     // Public Key Verification
-    publicKeyVerification();
+    //publicKeyVerification();
 
     // TESLA Kroot Verification
     KrootVerification();
@@ -202,12 +203,14 @@ void KrootVerification(){
     // TODO define size of digital signature OR change type and apply respective function to comput size.
 
     // Parameters
+    int ret = 0;
     const char* Kroot;
     evp_pkey_st* PublicKey;
     evp_pkey_st* PrivateKey; // structure? create private key with ECC?
     const unsigned char* DS;
     void* Signature = NULL;
-    ECDSA_LoadKeys();
+    std::string pathToKeys = "";
+    ECDSA_LoadKeys(pathToKeys);
     ECDSA_Sign_OSSL(Kroot, PublicKey, Signature);
     bool resultVerificationKroot = ECDSA_Verify_OSSL(Kroot,
                                                      PublicKey,
@@ -303,31 +306,47 @@ void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature){
     if(mdctx) EVP_MD_CTX_free(mdctx);
 }
 
-void ECDSA_LoadKeys() {
+void ECDSA_LoadKeys(std::string path) {
     // TODO retrieve PrivateKeyBytes from .pem
-
+    int ret = 0;
     OSSL_DECODER_CTX *dctx;
     EVP_PKEY *pkey = NULL;
     const char *format = "PEM";   /* NULL for any format */
     const char *structure = NULL; /* any structure */
-    const char *keytype = "RSA";  /* NULL for any key */
+    const char *keytype =  NULL;  /* NULL for any key */
     const unsigned char *pass = NULL;
-    const unsigned char** PrivateKeyBytes;
-    size_t* SizePrivateKey;
-    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, format, structure,
-                                         keytype,
-                                         OSSL_KEYMGMT_SELECT_KEYPAIR
-                                         | OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS,
+    const char* PrivateKeyBytes = NULL;
+    size_t SizePrivateKey {};
+    BIO* bio{nullptr};
+
+    PrivateKeyBytes = "MG8CAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQIEVTBTAgEBBBiFEFnbUTeMpX5h/kxf\n"
+                                         "w84/sleueQ2Po3GhNAMyAARBRrSXwzm89f60m9wv4QQvierK5IIw0Ul0Jlttfmkz\n"
+                                         "qItFLQJBgSBUZCR6623nH8Q=";
+    if(!(bio = BIO_new_mem_buf(PrivateKeyBytes, strlen(PrivateKeyBytes))))goto err;
+    // if(!(pkey = PEM_read_bio_PrivateKey(bio,NULL,NULL,NULL))) goto err; segmentation error.
+
+    // set up decoder for processing input data into an EVP_PKEY structure.
+    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, format,
+                                         structure, keytype,
+                                         OSSL_KEYMGMT_SELECT_KEYPAIR,
                                          NULL, NULL);
-    if (dctx == NULL) {
-        /* error: no suitable potential decoders found */
+
+    // or OSSL_DECODER_from_data() ? it is recommended bio, but right now my data is... raw data :D
+
+    if (dctx == NULL) goto err;
+    if (OSSL_DECODER_from_bio(dctx, bio)) { //
+        /* pkey is created with the decoded data from the bio */
+    } else goto err;
+
+
+    err:
+    if(ret != 1)
+    {
+        /* Do some error handling */
+        std::cout<< "Error" << std::endl;
     }
-    if (pass != NULL)
-        OSSL_DECODER_CTX_set_passphrase(dctx, pass, -1/*strlen(pass)*/);
-    if (OSSL_DECODER_from_data(dctx,PrivateKeyBytes,SizePrivateKey)) {
-        /* pkey is created with the decoded data from the buffer */
-    } else {
-        /* decoding failure */
-    }
+    // Free memory
     OSSL_DECODER_CTX_free(dctx);
+    BIO_free(bio);
+    // TODO what else?
 }
