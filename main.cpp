@@ -3,14 +3,15 @@
 #include <openssl/ecdsa.h> // ECDSA
 #include <openssl/ec.h>
 #include <openssl/evp.h> // ECDSA signing and verifying
-//#include "openssl/crypto.h" //OPENSSL_malloc
 #include <openssl/decoder.h> // reading the key pair from file
+#include <openssl/core.h>
 #include <openssl/pem.h>
 #include <iomanip>
 #include <cstring>
 #include <cryptopp/sha.h>
 #include <cryptopp/filters.h>
 #include <cryptopp/hex.h>
+#include <fstream> // open .pem file
 
 // Forward declarations -- Secure Hash Algorithm
 std::string calculateSHA256_openSSL(const char*);
@@ -34,15 +35,17 @@ ByteArray sha256(const ByteArray message,
 
 // Forward declarations -- Key root verification
 void KrootVerification();
-void ECDSA_LoadKeys(std::string path);
+int ECDSA_LoadKeys(const char*  path);
 bool ECDSA_Verify_OSSL(const char* message,
                        evp_pkey_st *PublicKey,
                        const unsigned char* DigitalSignature, size_t sizeDS);
 void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature);
 
+// Global variables
+EVP_PKEY *ECCPrivateKey{NULL};
+EVP_PKEY *ECCPublicKey{NULL};
 
 int main() {
-
     // Secure Hash Algorithm
     const char* input = "Hello, World!";
     const char* sha256Input = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
@@ -190,28 +193,28 @@ ByteArray concatenate(ByteArray input1,size_t size1, ByteArray input2,size_t siz
     return result;
 }
 
-/*!
+// Functions -- Kroot verification
+    /*!
      * \brief
      * Method for testing the ECDSA capabilities of openSSL::libcrypto
      */
 void KrootVerification(){
     // TODO define the TESLA Key Root (message)
     // TODO create an ECDSA-P-256 private and public keys
-    // TODO  create a signature (DS) with the private key and message
-    // TODO encrypt signature and message with recipient's public key -- this step is omitted
-    // TODO debug the
+    // TODO  create a signature (DS) with the private key and message - segmentation error now
+    // TODO encrypt signature and message with recipient's public key -- this step is done with my public key instead
     // TODO define size of digital signature OR change type and apply respective function to comput size.
 
     // Parameters
     int ret = 0;
-    const char* Kroot;
+    const char* Kroot = "message to encrypt";
     evp_pkey_st* PublicKey;
     evp_pkey_st* PrivateKey; // structure? create private key with ECC?
     const unsigned char* DS;
     void* Signature = NULL;
-    std::string pathToKeys = "";
+    const char* pathToKeys = "../keys/2023-10-31-PrivateKey-using-X962-192.pem";
     ECDSA_LoadKeys(pathToKeys);
-    ECDSA_Sign_OSSL(Kroot, PublicKey, Signature);
+    ECDSA_Sign_OSSL(Kroot, ECCPublicKey, Signature);
     bool resultVerificationKroot = ECDSA_Verify_OSSL(Kroot,
                                                      PublicKey,
                                                      DS,
@@ -305,48 +308,62 @@ void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature){
     if(Signature && !ret) CRYPTO_free(Signature,"",-1); // TODO Define
     if(mdctx) EVP_MD_CTX_free(mdctx);
 }
-
-void ECDSA_LoadKeys(std::string path) {
-    // TODO retrieve PrivateKeyBytes from .pem
-    int ret = 0;
+/*! \brief
+     * Loads the private and public keys from a .pem file into the format that OSSL uses for further processing.
+     * \returns void
+     */
+int ECDSA_LoadKeys(const char* path) {
+    // ✔️ solve SIGSEG error in OSSL_DECODER_CTX_new_for_pkey =>pointer issues.
+    // TODO retrieve PrivateKeyBytes from .pem - right now hard-coded
+    int ret = 1; // 1 success, 0 failure
     OSSL_DECODER_CTX *dctx;
     EVP_PKEY *pkey = NULL;
-    const char *format = "PEM";   /* NULL for any format */
+    const char *format = NULL;   /* NULL for any format, PEM in the future*/
     const char *structure = NULL; /* any structure */
-    const char *keytype =  NULL;  /* NULL for any key */
+    const char *keytype =  NULL;//NULL;  /* NULL for any key, "EC" ?*/
     const unsigned char *pass = NULL;
-    const char* PrivateKeyBytes = NULL;
-    size_t SizePrivateKey {};
-    BIO* bio{nullptr};
+    BIO* bio;
+    BIO* bio2;
 
-    PrivateKeyBytes = "MG8CAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQIEVTBTAgEBBBiFEFnbUTeMpX5h/kxf\n"
-                                         "w84/sleueQ2Po3GhNAMyAARBRrSXwzm89f60m9wv4QQvierK5IIw0Ul0Jlttfmkz\n"
-                                         "qItFLQJBgSBUZCR6623nH8Q=";
-    if(!(bio = BIO_new_mem_buf(PrivateKeyBytes, strlen(PrivateKeyBytes))))goto err;
-    // if(!(pkey = PEM_read_bio_PrivateKey(bio,NULL,NULL,NULL))) goto err; segmentation error.
+    const char PrivateKeyBytes[]=R"(
+-----BEGIN PRIVATE KEY-----
+MG8CAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQIEVTBTAgEBBBiFEFnbUTeMpX5h/kxf
+w84/sleueQ2Po3GhNAMyAARBRrSXwzm89f60m9wv4QQvierK5IIw0Ul0Jlttfmkz
+qItFLQJBgSBUZCR6623nH8Q=
+-----END PRIVATE KEY-----
+)";
+    const char PublicKeyBytes[]=R"(
+-----BEGIN PUBLIC KEY-----
+MEkwEwYHKoZIzj0CAQYIKoZIzj0DAQIDMgAEQUa0l8M5vPX+tJvcL+EEL4nqyuSC
+MNFJdCZbbX5pM6iLRS0CQYEgVGQkeutt5x/E
+-----END PUBLIC KEY-----
+)";
 
+
+    if(!(bio = BIO_new_mem_buf(PrivateKeyBytes, -1))) ret = 0;
+    ECCPrivateKey = PEM_read_bio_PrivateKey(bio,NULL,NULL,NULL);
+    if(!(bio2 = BIO_new_mem_buf(PublicKeyBytes, -1))) ret = 0;
+    ECCPublicKey =  PEM_read_bio_PUBKEY(bio,NULL,NULL,NULL);
+
+    /*// Read file
+    FILE *fp = fopen(path, "r"); if (fp == NULL) ret = 0;
     // set up decoder for processing input data into an EVP_PKEY structure.
-    dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, format,
+    if(!(dctx = OSSL_DECODER_CTX_new_for_pkey(&pkey, format,
                                          structure, keytype,
-                                         OSSL_KEYMGMT_SELECT_KEYPAIR,
-                                         NULL, NULL);
-
-    // or OSSL_DECODER_from_data() ? it is recommended bio, but right now my data is... raw data :D
-
-    if (dctx == NULL) goto err;
-    if (OSSL_DECODER_from_bio(dctx, bio)) { //
-        /* pkey is created with the decoded data from the bio */
-    } else goto err;
+                                         OSSL_KEYMGMT_SELECT_PRIVATE_KEY,
+                                         NULL, NULL))) ret = 0;
+    if (( 1 == OSSL_DECODER_from_fp(dctx,fp))) {
+        // pkey is created with the decoded data from the bio
+        // did not find any function to read the EPV_PKEY from a CTX..x
+        std::cout<< "Pkey loaded into CTX successfuly. " << std::endl;
+    } else ret = 0;*/
 
 
-    err:
-    if(ret != 1)
-    {
-        /* Do some error handling */
-        std::cout<< "Error" << std::endl;
-    }
-    // Free memory
-    OSSL_DECODER_CTX_free(dctx);
+
+/*    // Free memory
+    OSSL_DECODER_CTX_free(dctx);*/
     BIO_free(bio);
-    // TODO what else?
+    BIO_free(bio2);
+
+    return ret;
 }
