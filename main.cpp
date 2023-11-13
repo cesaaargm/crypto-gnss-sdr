@@ -6,6 +6,7 @@
 #include <openssl/decoder.h> // reading the key pair from file
 #include <openssl/core.h>
 #include <openssl/pem.h>
+#include <openssl/err.h> // ERR_get_error()
 #include <iomanip>
 #include <cstring>
 #include <cryptopp/sha.h>
@@ -37,27 +38,28 @@ ByteArray sha256(const ByteArray message,
 void KrootVerification();
 int ECDSA_LoadKeys(const char*  path);
 bool ECDSA_Verify_OSSL(const char* message,
-                       evp_pkey_st *PublicKey,
+                       EVP_PKEY *PublicKey,
                        const unsigned char* DigitalSignature, size_t sizeDS);
-void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature);
+void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void** Signature,size_t* SignatureLength);
 
 // Global variables
 EVP_PKEY *ECCPrivateKey{NULL};
 EVP_PKEY *ECCPublicKey{NULL};
 
+void printError(const char* Caller);
 int main() {
     // Secure Hash Algorithm
-    const char* input = "Hello, World!";
-    const char* sha256Input = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
-
-    std::cout << " SHA 256 :: input string :" << input << std::endl;
-    std::cout << " SHA 256 :: input string hash :" << sha256Input << std::endl;
-
-    std::string Sha256_openSSL = calculateSHA256_openSSL(input);
-    std::string Sha256_cryptopp = calculateSHA256_cryptopp(input);
+    //    const char* input = "Hello, World!";
+    //    const char* sha256Input = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
+    //
+    //    std::cout << " SHA 256 :: input string :" << input << std::endl;
+    //    std::cout << " SHA 256 :: input string hash :" << sha256Input << std::endl;
+    //
+    //    std::string Sha256_openSSL = calculateSHA256_openSSL(input);
+    //    std::string Sha256_cryptopp = calculateSHA256_cryptopp(input);
 
     // Public Key Verification
-    //publicKeyVerification();
+    //    publicKeyVerification();
 
     // TESLA Kroot Verification
     KrootVerification();
@@ -199,35 +201,36 @@ ByteArray concatenate(ByteArray input1,size_t size1, ByteArray input2,size_t siz
      * Method for testing the ECDSA capabilities of openSSL::libcrypto
      */
 void KrootVerification(){
-    // TODO define the TESLA Key Root (message)
-    // TODO create an ECDSA-P-256 private and public keys
-    // TODO  create a signature (DS) with the private key and message - segmentation error now
-    // TODO encrypt signature and message with recipient's public key -- this step is done with my public key instead
-    // TODO define size of digital signature OR change type and apply respective function to comput size.
+    // ✔️ define the TESLA Key Root (message)
+    // ✔️ create an ECDSA-P-256 private and public keys
+    // ✔️  create a signature (DS) with the private key and message
+    // TODO encrypt message with recipient's public key -- this step is done with my public key instead
+    // ✔️ define size of digital signature OR change type and apply respective function to compute size.
 
     // Parameters
     int ret = 0;
     const char* Kroot = "message to encrypt";
-    evp_pkey_st* PublicKey;
-    evp_pkey_st* PrivateKey; // structure? create private key with ECC?
-    const unsigned char* DS;
-    void* Signature = NULL;
+    unsigned char* Signature{nullptr}; // store generated signature here.
+    size_t SignatureLength{0};
     const char* pathToKeys = "../keys/2023-10-31-PrivateKey-using-X962-192.pem";
     ECDSA_LoadKeys(pathToKeys);
-    ECDSA_Sign_OSSL(Kroot, ECCPublicKey, Signature);
-    bool resultVerificationKroot = ECDSA_Verify_OSSL(Kroot,
-                                                     PublicKey,
-                                                     DS,
-                                                     -1);
+    ECDSA_Sign_OSSL(Kroot, ECCPrivateKey, reinterpret_cast<void**>(&Signature),&SignatureLength); // Sender signs with its Pr_Key
+    // assume the Kroot was encrypted and sent out and received and decrypted and is provided to the sig verification.
+    bool resultVerificationKroot = ECDSA_Verify_OSSL(Kroot, //
+                                                     ECCPublicKey,
+                                                     Signature,
+                                                     SignatureLength);
 
-    std::cout << "The Kroot and the digital signature provided are: " << resultVerificationKroot << std::endl;
+    std::cout << "The Kroot(message) and the Signature provided are valid (true/false): " << resultVerificationKroot << std::endl;
+    CRYPTO_free(Signature,__FILE__,__LINE__);
 }
     /*!
-     * \brief Uses the Elliptic Curve Digital Signature Algorithm to verify that the signature (and key root, part of
-     * the signature) belong to the private key associated with the public key given.
+     * \brief Uses the Elliptic Curve Digital Signature Algorithm to verify that the signature of the message is valid
+     * and that it belongs to the private key associated with the public key given.
      * \returns bool with the verification result
      */
-bool ECDSA_Verify_OSSL(const char* message, evp_pkey_st *PublicKey, const unsigned char* DigitalSignature, size_t sizeDS){
+bool ECDSA_Verify_OSSL(const char* message, EVP_PKEY *PublicKey, const unsigned char* DigitalSignature, size_t sizeDS){
+
     /* Questions to answer:
      * pctx is null?
      * engine?
@@ -237,7 +240,7 @@ bool ECDSA_Verify_OSSL(const char* message, evp_pkey_st *PublicKey, const unsign
     // Verify the signature with the public key.
 
     EVP_MD_CTX *mdctx = NULL; // verification context; a struct that wraps the message to be verified.
-    int ret = 0;
+    int ret = 0; // error
 
     /* Create the Message Digest Context */
     if(!(mdctx = EVP_MD_CTX_new())) goto err; // Allocates and returns a digest context.
@@ -268,45 +271,38 @@ bool ECDSA_Verify_OSSL(const char* message, evp_pkey_st *PublicKey, const unsign
      * Uses the Elliptic Curve Digital Signature Algorithm to sign a message with a private key
      * \returns bool with the process result
      */
-void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature){
+void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PrivateKey, void** Signature, size_t* SignatureLength){
     EVP_MD_CTX *mdctx = NULL;
-    int ret = 0;
-    size_t* SignatureLength {nullptr};
 /* Create the Message Digest Context */
-    if(!(mdctx = EVP_MD_CTX_new())) goto err;
+    if(!(mdctx = EVP_MD_CTX_new())) goto err; // EVP_MD_CTX_create();?
 
-/* Initialise the DigestSign operation - SHA-256 has been selected as the message digest function in this example */
-    if(1 != EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, PublicKey)) goto err;
+/* Initialise the DigestSign operation with SHA256 and the private key */
+    if(1 != EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, PrivateKey)) goto err;
 
     /* Call update with the message */
     if(1 != EVP_DigestSignUpdate(mdctx, message, strlen(message))) goto err;
 
     /* Finalise the DigestSign operation */
+
     /* First call EVP_DigestSignFinal with a NULL sig parameter to obtain the length of the
      * signature. Length is returned in slen */
-
-    if(1 != EVP_DigestSignFinal(mdctx, NULL,SignatureLength )) goto err;
+    // improvement: use only EVP_DigestSign()?
+    if(1 != EVP_DigestSignFinal(mdctx, NULL, SignatureLength)) goto err;
     /* Allocate memory for the signature based on size in slen */
-    if(!(Signature = CRYPTO_malloc(sizeof(unsigned char) * (*SignatureLength),
-                                   "",
-                                   -1))) goto err; // TODO define
+    if(!(*Signature = CRYPTO_malloc(sizeof(unsigned char) * (*SignatureLength),__FILE__,__LINE__))) goto err; // OPENSSL_malloc deprecated
     /* Obtain the signature */
     if(1 != EVP_DigestSignFinal(mdctx,
-                                reinterpret_cast<unsigned char*>(Signature)/*totally unsure*/,
+                                reinterpret_cast<unsigned char*>(*Signature),
                                 SignatureLength)) goto err;
 
     /* Success */
-    ret = 1;
-        std::cout << "The signature of" << message << "is: " << Signature << std::endl;
-    err:
-    if(ret != 1)
-    {
-        /* Do some error handling */
-    }
-
+    std::cout << "The signature of" << message << "is: " << reinterpret_cast<unsigned char*>(*Signature) << std::endl;
     /* Clean up */
-    if(Signature && !ret) CRYPTO_free(Signature,"",-1); // TODO Define
-    if(mdctx) EVP_MD_CTX_free(mdctx);
+    err:
+        {printError("ECDSA_Sign_OSSL");};
+
+    if(mdctx)
+        EVP_MD_CTX_free(mdctx);
 }
 /*! \brief
      * Loads the private and public keys from a .pem file into the format that OSSL uses for further processing.
@@ -315,6 +311,8 @@ void ECDSA_Sign_OSSL(const char* message, EVP_PKEY* PublicKey, void* Signature){
 int ECDSA_LoadKeys(const char* path) {
     // ✔️ solve SIGSEG error in OSSL_DECODER_CTX_new_for_pkey =>pointer issues.
     // TODO retrieve PrivateKeyBytes from .pem - right now hard-coded
+    // HH: std::string mejor luego lo casteas
+    // HH: crea function para printear (static_cast seguramente)
     int ret = 1; // 1 success, 0 failure
     OSSL_DECODER_CTX *dctx;
     EVP_PKEY *pkey = NULL;
@@ -340,11 +338,11 @@ MNFJdCZbbX5pM6iLRS0CQYEgVGQkeutt5x/E
 )";
 
 
-    if(!(bio = BIO_new_mem_buf(PrivateKeyBytes, -1))) ret = 0;
+    if(!(bio = BIO_new_mem_buf(PrivateKeyBytes, -1))) ret = 0; // -1 == length to be computed
     ECCPrivateKey = PEM_read_bio_PrivateKey(bio,NULL,NULL,NULL);
     if(!(bio2 = BIO_new_mem_buf(PublicKeyBytes, -1))) ret = 0;
-    ECCPublicKey =  PEM_read_bio_PUBKEY(bio,NULL,NULL,NULL);
-
+    ECCPublicKey =  PEM_read_bio_PUBKEY(bio2,NULL,NULL,NULL);
+    //EVP_PKEY_print_private(bio, ECCPrivateKey, 1,NULL); // TODO how to access BIO object
     /*// Read file
     FILE *fp = fopen(path, "r"); if (fp == NULL) ret = 0;
     // set up decoder for processing input data into an EVP_PKEY structure.
@@ -366,4 +364,15 @@ MNFJdCZbbX5pM6iLRS0CQYEgVGQkeutt5x/E
     BIO_free(bio2);
 
     return ret;
+}
+
+void printError(const char* Caller){
+    char temp[256];
+    char* e =ERR_error_string(ERR_get_error(),temp);
+    if (e) {
+        // error:[error code]:[library name]::[reason string]
+        std::cout <<"Error occurred in " << Caller << std::endl << e << std::endl;
+    } else {
+        std::cerr << "printError::Error converting error code to string." << std::endl;
+    }
 }
